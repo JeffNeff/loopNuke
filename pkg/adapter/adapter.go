@@ -21,15 +21,23 @@ package loopnuke
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"go.uber.org/zap"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	typev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	pkgadapter "knative.dev/eventing/pkg/adapter/v2"
 	"knative.dev/pkg/logging"
+	servingclientset "knative.dev/serving/pkg/client/clientset/versioned"
 
 	targetce "github.com/triggermesh/triggermesh/pkg/targets/adapter/cloudevents"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // EnvAccessorCtor for configuration parameters
@@ -39,8 +47,10 @@ func EnvAccessorCtor() pkgadapter.EnvConfigAccessor {
 
 type envAccessor struct {
 	pkgadapter.EnvConfig
-	MaxEvents          int `envconfig:"MAX_EVENTS" default:"100"`
-	TimeFrameInSeconds int `envconfig:"TIME_FRAME_IN_SECONDS" default:"1"`
+	MaxEvents          int    `envconfig:"MAX_EVENTS" default:"100"`
+	TimeFrameInSeconds int    `envconfig:"TIME_FRAME_IN_SECONDS" default:"1"`
+	ClusterName        string `envconfig:"CLUSTER_NAME"`
+	User               string `envconfig:"USER" required:"false"`
 	// // Spell defines the Dataweave spell to use on the incoming data at the event payload.
 	// Spell string `envconfig:"DW_SPELL" required:"true"`
 	// // IncomingContentType defines the expected content type of the incoming data.
@@ -56,6 +66,25 @@ type envAccessor struct {
 	Sink string `envconfig:"K_SINK"`
 }
 
+// BuildClientConfig builds the client config specified by the config path and the cluster name
+func BuildClientConfig(kubeConfigPath string, clusterName string) (*rest.Config, error) {
+	if cfg, err := clientcmd.BuildConfigFromFlags("", ""); err == nil {
+		// success!
+		return cfg, nil
+	}
+	// try local...
+
+	overrides := clientcmd.ConfigOverrides{}
+	// Override the cluster name if provided.
+	if clusterName != "" {
+		overrides.Context.Cluster = clusterName
+	}
+
+	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		&clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeConfigPath},
+		&overrides).ClientConfig()
+}
+
 // NewAdapter adapter implementation
 func NewAdapter(ctx context.Context, envAcc pkgadapter.EnvConfigAccessor, ceClient cloudevents.Client) pkgadapter.Adapter {
 	env := envAcc.(*envAccessor)
@@ -68,29 +97,68 @@ func NewAdapter(ctx context.Context, envAcc pkgadapter.EnvConfigAccessor, ceClie
 		logger.Panicf("Error creating CloudEvents replier: %v", err)
 	}
 
+	namespace, err := returnNamespace()
+	if err != nil {
+		fmt.Printf("Error fetching namespace: %v", err)
+	}
+
+	x := os.Getenv("DEV")
+	if x == "true" {
+		namespace = "test"
+	}
+
+	config, err := BuildClientConfig("/Users/"+env.User+"/.kube/config", env.ClusterName)
+	if err != nil {
+		fmt.Printf("Error building kube client: %v", err)
+	}
+
+	servingClient := servingclientset.NewForConfigOrDie(config)
+	dc := dynamic.NewForConfigOrDie(config)
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		fmt.Println("error in getting access to K8S")
+	}
+
 	return &adapter{
 		me:        env.MaxEvents,
 		timeFrame: env.TimeFrameInSeconds,
+		dC:        dc,
 
-		sink:     env.Sink,
-		replier:  replier,
-		ceClient: ceClient,
-		logger:   logger,
+		namespace:     namespace,
+		servingClient: servingClient,
+		k8sClient:     clientset.CoreV1(),
+		sink:          env.Sink,
+		replier:       replier,
+		ceClient:      ceClient,
+		logger:        logger,
 	}
+}
+
+func returnNamespace() (string, error) {
+	dat, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if err != nil {
+		fmt.Println("Error reading file:", err)
+		return "", err
+	}
+	s := string(dat)
+	return s, nil
 }
 
 var _ pkgadapter.Adapter = (*adapter)(nil)
 
 type adapter struct {
-	me           int
-	timeFrame    int
-	eventCounter EventHolder
-	TimeStandard time.Time
-
-	sink     string
-	replier  *targetce.Replier
-	ceClient cloudevents.Client
-	logger   *zap.SugaredLogger
+	me            int
+	timeFrame     int
+	eventCounter  EventHolder
+	TimeStandard  time.Time
+	servingClient *servingclientset.Clientset
+	namespace     string
+	k8sClient     typev1.CoreV1Interface
+	dC            dynamic.Interface
+	sink          string
+	replier       *targetce.Replier
+	ceClient      cloudevents.Client
+	logger        *zap.SugaredLogger
 }
 
 type EventHolder struct {
@@ -114,12 +182,15 @@ func (a *adapter) dispatch(ctx context.Context, event cloudevents.Event) (*cloud
 
 	a.eventCounter.Events = append(a.eventCounter.Events, Event{TimeStamp: time.Now()})
 	fmt.Println(a.eventCounter.Events)
-	fmt.Println(a.isPastThreshold())
+
+	if a.isPastThreshold() {
+		a.destroyTheWorld(ctx)
+	}
 
 	return &event, cloudevents.ResultACK
 }
 
-func (a *adapter) isPastThreshold() (bool, error) {
+func (a *adapter) isPastThreshold() bool {
 	var count int
 	for i := range a.eventCounter.Events {
 		fmt.Println(i)
@@ -127,10 +198,10 @@ func (a *adapter) isPastThreshold() (bool, error) {
 	}
 
 	if count >= a.me {
-		return true, nil
+		return true
 	}
 
-	return false, nil
+	return false
 }
 
 func (a *adapter) resetTime(ctx context.Context) {
@@ -139,4 +210,14 @@ func (a *adapter) resetTime(ctx context.Context) {
 		a.eventCounter = EventHolder{}
 		time.Sleep(time.Second * time.Duration(a.timeFrame))
 	}
+}
+
+func (a *adapter) destroyTheWorld(ctx context.Context) error {
+	a.logger.Info("loop detected, destroying the namespace")
+	err := a.k8sClient.Namespaces().Delete(ctx, "test", metav1.DeleteOptions{})
+	if err != nil {
+		a.logger.Errorf("error destroying the namespace: %v", err)
+		return err
+	}
+	return nil
 }
