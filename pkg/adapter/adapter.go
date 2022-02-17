@@ -20,6 +20,8 @@ package loopnuke
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -37,6 +39,8 @@ func EnvAccessorCtor() pkgadapter.EnvConfigAccessor {
 
 type envAccessor struct {
 	pkgadapter.EnvConfig
+	MaxEvents          int `envconfig:"MAX_EVENTS" default:"100"`
+	TimeFrameInSeconds int `envconfig:"TIME_FRAME_IN_SECONDS" default:"1"`
 	// // Spell defines the Dataweave spell to use on the incoming data at the event payload.
 	// Spell string `envconfig:"DW_SPELL" required:"true"`
 	// // IncomingContentType defines the expected content type of the incoming data.
@@ -65,6 +69,8 @@ func NewAdapter(ctx context.Context, envAcc pkgadapter.EnvConfigAccessor, ceClie
 	}
 
 	return &adapter{
+		me:        env.MaxEvents,
+		timeFrame: env.TimeFrameInSeconds,
 
 		sink:     env.Sink,
 		replier:  replier,
@@ -76,20 +82,61 @@ func NewAdapter(ctx context.Context, envAcc pkgadapter.EnvConfigAccessor, ceClie
 var _ pkgadapter.Adapter = (*adapter)(nil)
 
 type adapter struct {
+	me           int
+	timeFrame    int
+	eventCounter EventHolder
+	TimeStandard time.Time
+
 	sink     string
 	replier  *targetce.Replier
 	ceClient cloudevents.Client
 	logger   *zap.SugaredLogger
 }
 
+type EventHolder struct {
+	Events []Event `json:"event"`
+}
+
+type Event struct {
+	TimeStamp time.Time `json:"timeStamp"`
+}
+
 // Start is a blocking function and will return if an error occurs
 // or the context is cancelled.
 func (a *adapter) Start(ctx context.Context) error {
 	a.logger.Info("starting logNuke adapter")
+	go a.resetTime(ctx)
 	return a.ceClient.StartReceiver(ctx, a.dispatch)
 }
 
 func (a *adapter) dispatch(ctx context.Context, event cloudevents.Event) (*cloudevents.Event, cloudevents.Result) {
 	a.logger.Infof("Received event: %s", event.Context.GetID())
+
+	a.eventCounter.Events = append(a.eventCounter.Events, Event{TimeStamp: time.Now()})
+	fmt.Println(a.eventCounter.Events)
+	fmt.Println(a.isPastThreshold())
+
 	return &event, cloudevents.ResultACK
+}
+
+func (a *adapter) isPastThreshold() (bool, error) {
+	var count int
+	for i := range a.eventCounter.Events {
+		fmt.Println(i)
+		count++
+	}
+
+	if count >= a.me {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+func (a *adapter) resetTime(ctx context.Context) {
+	for {
+		a.TimeStandard = time.Now()
+		a.eventCounter = EventHolder{}
+		time.Sleep(time.Second * time.Duration(a.timeFrame))
+	}
 }

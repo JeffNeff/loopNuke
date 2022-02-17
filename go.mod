@@ -14,6 +14,7 @@ require (
 replace k8s.io/client-go => k8s.io/client-go v0.21.4
 
 require (
+	github.com/imdario/mergo v0.3.12
 	github.com/triggermesh/triggermesh v1.13.0
 	go.uber.org/zap v1.20.0
 )
@@ -43,7 +44,6 @@ require (
 	github.com/hashicorp/go-cleanhttp v0.5.1 // indirect
 	github.com/hashicorp/go-retryablehttp v0.6.7 // indirect
 	github.com/hashicorp/golang-lru v0.5.4 // indirect
-	github.com/imdario/mergo v0.3.12 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kelseyhightower/envconfig v1.4.0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.2-0.20181231171920-c182affec369 // indirect
