@@ -48,7 +48,7 @@ func EnvAccessorCtor() pkgadapter.EnvConfigAccessor {
 
 type envAccessor struct {
 	pkgadapter.EnvConfig
-	MaxEvents          int    `envconfig:"MAX_EVENTS" default:"100"`
+	MaxEvents          int    `envconfig:"MAX_EVENTS" default:"10"`
 	TimeFrameInSeconds int    `envconfig:"TIME_FRAME_IN_SECONDS" default:"1"`
 	ClusterName        string `envconfig:"CLUSTER_NAME"`
 	User               string `envconfig:"USER" required:"false"`
