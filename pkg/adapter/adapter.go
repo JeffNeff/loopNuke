@@ -14,8 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package dataweavetransformation implements a CloudEvents adapter that transforms a CloudEvent
-// using a dataweave spell.
+// Package loopnuke implements a CloudEvents adapter that monitors the
+// events and checks them against a threshold of allowed events per aloted time.
+// If the threshold is reached, the namespace is destroyed.
 package loopnuke
 
 import (
@@ -51,14 +52,6 @@ type envAccessor struct {
 	TimeFrameInSeconds int    `envconfig:"TIME_FRAME_IN_SECONDS" default:"1"`
 	ClusterName        string `envconfig:"CLUSTER_NAME"`
 	User               string `envconfig:"USER" required:"false"`
-	// // Spell defines the Dataweave spell to use on the incoming data at the event payload.
-	// Spell string `envconfig:"DW_SPELL" required:"true"`
-	// // IncomingContentType defines the expected content type of the incoming data.
-	// IncomingContentType string `envconfig:"INCOMING_CONTENT_TYPE" default:"application/json"`
-	// // OutputContentType defines the content the cloudevent to be sent with the transformed data.
-	// OutputContentType string `envconfig:"OUTPUT_CONTENT_TYPE" default:"application/json"`
-	// // BridgeIdentifier is the name of the bridge workflow this target is part of.
-	BridgeIdentifier string `envconfig:"EVENTS_BRIDGE_IDENTIFIER"`
 	// CloudEvents responses parametrization
 	CloudEventPayloadPolicy string `envconfig:"EVENTS_PAYLOAD_POLICY" default:"error"`
 	// Sink defines the target sink for the events. If no Sink is defined the
@@ -90,8 +83,7 @@ func NewAdapter(ctx context.Context, envAcc pkgadapter.EnvConfigAccessor, ceClie
 	env := envAcc.(*envAccessor)
 	logger := logging.FromContext(ctx)
 	replier, err := targetce.New(env.Component, logger.Named("replier"),
-		targetce.ReplierWithStatefulHeaders(env.BridgeIdentifier),
-		targetce.ReplierWithStaticResponseType("io.triggermesh.dataweavetransformation.error"),
+		targetce.ReplierWithStaticResponseType("io.tmneff.loopnuke.error"),
 		targetce.ReplierWithPayloadPolicy(targetce.PayloadPolicy(env.CloudEventPayloadPolicy)))
 	if err != nil {
 		logger.Panicf("Error creating CloudEvents replier: %v", err)
@@ -197,11 +189,7 @@ func (a *adapter) isPastThreshold() bool {
 		count++
 	}
 
-	if count >= a.me {
-		return true
-	}
-
-	return false
+	return count >= a.me
 }
 
 func (a *adapter) resetTime(ctx context.Context) {
@@ -214,7 +202,9 @@ func (a *adapter) resetTime(ctx context.Context) {
 
 func (a *adapter) destroyTheWorld(ctx context.Context) error {
 	a.logger.Info("loop detected, destroying the namespace")
-	err := a.k8sClient.Namespaces().Delete(ctx, "test", metav1.DeleteOptions{})
+	a.logger.Info("namespace")
+	a.logger.Info(a.namespace)
+	err := a.k8sClient.Namespaces().Delete(ctx, a.namespace, metav1.DeleteOptions{})
 	if err != nil {
 		a.logger.Errorf("error destroying the namespace: %v", err)
 		return err

@@ -1,0 +1,24 @@
+apiVersion: extensions.triggermesh.io/v1alpha1
+kind: GenericRegistration
+metadata:
+  name: loopnuke
+spec:
+
+  generate:
+    names:
+      kind: LoopNuke
+      plural: loopnukes
+
+  workload:
+    fromImage:
+      repo: gcr.io/ultra-hologram-297914/loopnuke:latest
+    formFactor:
+      knativeService:
+        minScale: 0
+    parameterOptions:
+      keyCasing: upper
+
+  configuration:
+    parameters:
+    - name: target
+      type: string

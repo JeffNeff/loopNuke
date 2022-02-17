@@ -1,0 +1,12 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: loop-nuke
+spec:
+  template:
+    spec:
+      containers:
+        - image: gcr.io/ultra-hologram-297914/loopnuke-0b5a9702993f8c0d6acc78de57f84ebc@sha256:eed5b359bb76c34efb353b85450b8ac61fd7a8f72fcab8cb05c9e0a48197050c
+          env:
+
+---

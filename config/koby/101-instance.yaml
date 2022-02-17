@@ -1,0 +1,6 @@
+apiVersion: components.extensions.triggermesh.io/v1alpha1
+kind: LoopNuke
+metadata:
+  name: loopnuke
+spec:
+  target: loop-nuke
